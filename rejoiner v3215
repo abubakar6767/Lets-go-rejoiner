@@ -1,5 +1,5 @@
 --[[
-    AUTO-JOIN VERSION <= 3215 WITH SERVER HOPPING & DRAGGABLE GUI (FIXED)
+    AUTO-JOIN VERSION <= 3215 WITH SERVER HOPPING & DRAGGABLE GUI
     Target PlaceID: 126884695634066
 ]]
 
@@ -14,16 +14,6 @@ local UserInputService = game:GetService("UserInputService")
 local targetPlaceId = 126884695634066
 local maxVersion = 3215
 local localPlayer = Players.LocalPlayer
-
--- HTTP Request wrapper function for executor compatibility
-local function httpRequest(options)
-    local req = (syn and syn.request) or (http and http.request) or http_request or (Fluxus and Fluxus.request) or request
-    if req then
-        return req(options)
-    else
-        return { Body = game:HttpGet(options.Url) }
-    end
-end
 
 --------------------------------------------------------------------------------
 -- 1. SHOP AUTO-BUY LOOP (Background Task)
@@ -74,11 +64,12 @@ statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 statusLabel.TextSize = 14
 statusLabel.Font = Enum.Font.SourceSansBold
 statusLabel.TextWrapped = true
-statusLabel.Text = "Checking server version..."
+statusLabel.Text = "Checking current server version..."
 statusLabel.Parent = frame
 
--- Draggable Logic
+-- Draggable UI Implementation
 local dragging, dragStart, startPos
+
 frame.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
@@ -104,15 +95,21 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 --------------------------------------------------------------------------------
--- 3. SERVER HOPPER & VERSION CHECK LOGIC
+-- 3. DIRECT VERSION CHECK & SERVER HOPPER
 --------------------------------------------------------------------------------
 local function serverHop()
     statusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
-    statusLabel.Text = "Version too high! Server hopping..."
+    statusLabel.Text = "Version too high! Hopping servers..."
 
+    local req = (syn and syn.request) or (http and http.request) or http_request or (Fluxus and Fluxus.request) or request
     local serversUrl = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100", targetPlaceId)
+
     local success, response = pcall(function()
-        return httpRequest({ Url = serversUrl, Method = "GET" }).Body
+        if req then
+            return req({ Url = serversUrl, Method = "GET" }).Body
+        else
+            return game:HttpGet(serversUrl)
+        end
     end)
 
     if success and response then
@@ -129,42 +126,22 @@ local function serverHop()
         end
     end
 
+    -- Fallback Teleport
     TeleportService:Teleport(targetPlaceId, localPlayer)
 end
 
--- Version Verification Task
+-- Read version natively from current engine state
 task.spawn(function()
+    task.wait(1)
     local currentVersion = game.PlaceVersion
 
-    -- If in target game place
-    if game.PlaceId == targetPlaceId then
-        if currentVersion <= maxVersion then
-            statusLabel.TextColor3 = Color3.fromRGB(85, 255, 127)
-            statusLabel.Text = string.format("Target Version Match!\nVersion: %d (<= %d)\nStaying in this server.", currentVersion, maxVersion)
-        else
-            statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
-            statusLabel.Text = string.format("Current Version: %d (> %d)\nInitiating Server Hop...", currentVersion, maxVersion)
-            task.wait(2)
-            serverHop()
-        end
+    if currentVersion <= maxVersion then
+        statusLabel.TextColor3 = Color3.fromRGB(85, 255, 127)
+        statusLabel.Text = string.format("Target Server Match!\nVersion: %d (<= %d)\nStaying in this server.", currentVersion, maxVersion)
     else
-        -- If currently in a different place, check target place version via Web API
-        local apiUrl = string.format("https://economy.roblox.com/v2/assets/%d/details", targetPlaceId)
-        local success, response = pcall(function()
-            return httpRequest({ Url = apiUrl, Method = "GET" }).Body
-        end)
-
-        if success and response then
-            local data = HttpService:JSONDecode(response)
-            local fetchedVersion = data and data.TargetId or 0
-            
-            -- Teleport to target place to check instance
-            TeleportService:Teleport(targetPlaceId, localPlayer)
-        else
-            statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
-            statusLabel.Text = "HTTP fetch failed. Hopping..."
-            task.wait(2)
-            serverHop()
-        end
+        statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+        statusLabel.Text = string.format("Current Version: %d (> %d)\nInitiating Server Hop...", currentVersion, maxVersion)
+        task.wait(2)
+        serverHop()
     end
 end)
