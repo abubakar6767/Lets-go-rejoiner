@@ -1,0 +1,82 @@
+--[[
+    AUTO-JOIN OLD PLACE VERSION (Target Version <= 3215)
+    Target PlaceID: 126884695634066
+]]
+
+local TeleportService = game:GetService("TeleportService")
+local Players = game:GetService("Players")
+local AssetService = game:GetService("AssetService")
+
+local targetPlaceId = 126884695634066
+local maxVersion = 3215
+local retryDelay = 3 -- Seconds between scan attempts
+local localPlayer = Players.LocalPlayer
+
+-- Create UI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "VersionTrackerGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 320, 0, 90)
+frame.Position = UDim2.new(0.5, -160, 0.8, 0)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 8)
+uiCorner.Parent = frame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -20, 1, -20)
+statusLabel.Position = UDim2.new(0, 10, 0, 10)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+statusLabel.TextSize = 14
+statusLabel.Font = Enum.Font.SourceSansBold
+statusLabel.TextWrapped = true
+statusLabel.Text = "Initializing version scanner..."
+statusLabel.Parent = frame
+
+-- Main Loop
+task.spawn(function()
+    while true do
+        statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        statusLabel.Text = "Scanning place metadata..."
+
+        local success, placeInfo = pcall(function()
+            return AssetService:GetAssetInfoAsync(targetPlaceId)
+        end)
+
+        if success and placeInfo then
+            local currentVersion = placeInfo.VersionNumber or 0
+            
+            if currentVersion <= maxVersion then
+                statusLabel.TextColor3 = Color3.fromRGB(85, 255, 127)
+                statusLabel.Text = string.format("Target Version Found!\nVersion: %d (<= %d)\nAttempting Join...", currentVersion, maxVersion)
+                
+                -- Attempt Teleport
+                local tpSuccess, tpErr = pcall(function()
+                    TeleportService:Teleport(targetPlaceId, localPlayer)
+                end)
+                
+                if not tpSuccess then
+                    statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+                    statusLabel.Text = "Teleport Failed:\n" .. tostring(tpErr)
+                else
+                    break -- Stop loop if teleport request successfully went through
+                end
+            else
+                statusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
+                statusLabel.Text = string.format("Current Version: %d\nWaiting for version <= %d\nRetrying in %ds...", currentVersion, maxVersion, retryDelay)
+            end
+        else
+            statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+            statusLabel.Text = "Failed to fetch place metadata.\nRetrying..."
+        end
+
+        task.wait(retryDelay)
+    end
+end)
