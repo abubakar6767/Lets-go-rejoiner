@@ -1,18 +1,43 @@
 --[[
-    AUTO-JOIN OLD PLACE VERSION (Target Version <= 3215)
+    AUTO-JOIN VERSION <= 3215 WITH SERVER HOPPING & DRAGGABLE GUI
     Target PlaceID: 126884695634066
 ]]
+
+repeat task.wait() until game:IsLoaded()
 
 local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
 local AssetService = game:GetService("AssetService")
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local targetPlaceId = 126884695634066
 local maxVersion = 3215
-local retryDelay = 3 -- Seconds between scan attempts
 local localPlayer = Players.LocalPlayer
 
--- Create UI
+--------------------------------------------------------------------------------
+-- 1. SHOP AUTO-BUY LOOP (Background Task)
+--------------------------------------------------------------------------------
+local remote = ReplicatedStorage
+    :WaitForChild("GameEvents")
+    :WaitForChild("BuyEventShopStock")
+
+task.spawn(function()
+    while true do
+        for _, shop in ipairs({ "Blood Moon Shop", "Twilight Shop" }) do
+            pcall(function()
+                remote:FireServer("Night Egg", shop)
+            end)
+            task.wait(0.1)
+        end
+        task.wait(10)
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 2. CENTERED & DRAGGABLE GUI SETUP
+--------------------------------------------------------------------------------
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "VersionTrackerGui"
 screenGui.ResetOnSpawn = false
@@ -20,9 +45,12 @@ screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(0, 320, 0, 90)
-frame.Position = UDim2.new(0.5, -160, 0.8, 0)
+-- Center Position Setup
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.Position = UDim2.new(0.5, 0, 0.5, 0)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.BorderSizePixel = 0
+frame.Active = true
 frame.Parent = screenGui
 
 local uiCorner = Instance.new("UICorner")
@@ -37,46 +65,103 @@ statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 statusLabel.TextSize = 14
 statusLabel.Font = Enum.Font.SourceSansBold
 statusLabel.TextWrapped = true
-statusLabel.Text = "Initializing version scanner..."
+statusLabel.Text = "Checking current server version..."
 statusLabel.Parent = frame
 
--- Main Loop
-task.spawn(function()
-    while true do
-        statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-        statusLabel.Text = "Scanning place metadata..."
+-- Make Frame Draggable
+local dragging, dragInput, dragStart, startPos
 
-        local success, placeInfo = pcall(function()
-            return AssetService:GetAssetInfoAsync(targetPlaceId)
-        end)
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
 
-        if success and placeInfo then
-            local currentVersion = placeInfo.VersionNumber or 0
-            
-            if currentVersion <= maxVersion then
-                statusLabel.TextColor3 = Color3.fromRGB(85, 255, 127)
-                statusLabel.Text = string.format("Target Version Found!\nVersion: %d (<= %d)\nAttempting Join...", currentVersion, maxVersion)
-                
-                -- Attempt Teleport
-                local tpSuccess, tpErr = pcall(function()
-                    TeleportService:Teleport(targetPlaceId, localPlayer)
-                end)
-                
-                if not tpSuccess then
-                    statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
-                    statusLabel.Text = "Teleport Failed:\n" .. tostring(tpErr)
-                else
-                    break -- Stop loop if teleport request successfully went through
-                end
-            else
-                statusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
-                statusLabel.Text = string.format("Current Version: %d\nWaiting for version <= %d\nRetrying in %ds...", currentVersion, maxVersion, retryDelay)
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
             end
-        else
-            statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
-            statusLabel.Text = "Failed to fetch place metadata.\nRetrying..."
-        end
+        end)
+    end
+end)
 
-        task.wait(retryDelay)
+frame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+--------------------------------------------------------------------------------
+-- 3. SERVER HOPPER & VERSION CHECK LOGIC
+--------------------------------------------------------------------------------
+local function serverHop()
+    statusLabel.TextColor3 = Color3.fromRGB(255, 170, 0)
+    statusLabel.Text = "Version too high! Hopping to a different server..."
+
+    local req = (syn and syn.request) or (http and http.request) or http_request or (Fluxus and Fluxus.request) or request
+    local serversUrl = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100", targetPlaceId)
+
+    local success, response = pcall(function()
+        if req then
+            return req({ Url = serversUrl, Method = "GET" }).Body
+        else
+            return game:HttpGet(serversUrl)
+        end
+    end)
+
+    if success and response then
+        local data = HttpService:JSONDecode(response)
+        if data and data.data then
+            for _, server in ipairs(data.data) do
+                -- Find a valid server that isn't full and isn't the current server
+                if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(targetPlaceId, server.id, localPlayer)
+                    end)
+                    task.wait(4)
+                end
+            end
+        end
+    end
+
+    -- Fallback normal teleport if specific instance fetching fails
+    TeleportService:Teleport(targetPlaceId, localPlayer)
+end
+
+-- Check logic on launch
+task.spawn(function()
+    local success, placeInfo = pcall(function()
+        return AssetService:GetAssetInfoAsync(targetPlaceId)
+    end)
+
+    if success and placeInfo then
+        local currentVersion = placeInfo.VersionNumber or 0
+
+        if currentVersion <= maxVersion then
+            -- STAY IN THIS SERVER
+            statusLabel.TextColor3 = Color3.fromRGB(85, 255, 127)
+            statusLabel.Text = string.format("Target Server Match!\nVersion: %d (<= %d)\nStaying in this server.", currentVersion, maxVersion)
+        else
+            -- REJOIN / HOP TO ANOTHER SERVER
+            statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+            statusLabel.Text = string.format("Current Version: %d (> %d)\nInitiating Server Hop...", currentVersion, maxVersion)
+            task.wait(2)
+            serverHop()
+        end
+    else
+        statusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+        statusLabel.Text = "Failed to retrieve place version.\nRetrying server hop..."
+        task.wait(2)
+        serverHop()
     end
 end)
